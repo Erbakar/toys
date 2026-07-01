@@ -103,9 +103,15 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-slate-800 py-3">
         <div className="max-w-2xl mx-auto px-4 text-center">
-          <p className="text-xs text-slate-600">
-            Mock Detection Servisi aktif — ileride FastAPI + YOLO11 + CLIP ile değiştirilecek
-          </p>
+          {import.meta.env.VITE_USE_MOCK !== 'false' ? (
+            <p className="text-xs text-amber-600/70">
+              ⚠ Mock Modu — gerçek fotoğraf analiz edilmiyor, veriler sabittir
+            </p>
+          ) : (
+            <p className="text-xs text-green-600/70">
+              ✓ YOLO11n aktif — {import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}
+            </p>
+          )}
         </div>
       </footer>
     </div>
