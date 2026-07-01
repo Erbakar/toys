@@ -1,0 +1,8 @@
+{
+  "name": "toys",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm install --prefix object-detector && npm run build --prefix object-detector"
+  }
+}
