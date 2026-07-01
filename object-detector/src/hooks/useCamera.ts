@@ -21,6 +21,11 @@ export function useCamera(): UseCameraReturn {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Her startCamera çağrısına benzersiz bir ID atanır.
+  // getUserMedia çözümlendiğinde ID eşleşmiyorsa başka bir çağrı
+  // gelmiş ya da component unmount olmuş demektir → stream iptal edilir.
+  const callIdRef = useRef(0);
+
   const [isSupported] = useState(() => !!(navigator.mediaDevices?.getUserMedia));
   const [isActive, setIsActive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -28,6 +33,10 @@ export function useCamera(): UseCameraReturn {
   const [facing, setFacing] = useState<CameraFacing>('environment');
 
   const stopCamera = useCallback(() => {
+    // Mevcut çağrıyı geçersiz kıl — devam eden getUserMedia varsa
+    // çözümlendiğinde kendini sonlandıracak.
+    callIdRef.current += 1;
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -40,32 +49,62 @@ export function useCamera(): UseCameraReturn {
 
   const startCamera = useCallback(
     async (facingMode: CameraFacing = facing) => {
+      // Bu çağrının ID'si — yarış koşulu tespiti için
+      callIdRef.current += 1;
+      const myCallId = callIdRef.current;
+
       setIsLoading(true);
       setError(null);
 
+      // Önceki stream'i temizle (callIdRef artırılmadan önce yapılmalı —
+      // burada zaten artırdık, stopCamera içindeki artırma bunu geçersiz
+      // kılmasın diye doğrudan stream'i durduruyoruz)
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setIsActive(false);
+
       try {
-        stopCamera();
-
-        const constraints: MediaStreamConstraints = {
-          video: {
-            facingMode,
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
-        };
+        });
 
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        // getUserMedia beklerken stopCamera çağrıldı veya yeni bir
+        // startCamera geldi → bu stream'i hemen durdur, işlemi bırak.
+        if (myCallId !== callIdRef.current) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
         streamRef.current = stream;
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+          try {
+            await videoRef.current.play();
+          } catch (playErr) {
+            // AbortError: element DOM'dan kaldırıldı ya da srcObject
+            // değiştirildi — güvenle görmezden gelinebilir.
+            if (playErr instanceof DOMException && playErr.name === 'AbortError') {
+              return;
+            }
+            throw playErr;
+          }
         }
+
+        // Hâlâ geçerli çağrıysa state'i güncelle
+        if (myCallId !== callIdRef.current) return;
 
         setFacing(facingMode);
         setIsActive(true);
       } catch (err) {
+        if (myCallId !== callIdRef.current) return;
+
         const message =
           err instanceof DOMException
             ? err.name === 'NotAllowedError'
@@ -76,10 +115,12 @@ export function useCamera(): UseCameraReturn {
             : 'Kamera başlatılamadı.';
         setError(message);
       } finally {
-        setIsLoading(false);
+        if (myCallId === callIdRef.current) {
+          setIsLoading(false);
+        }
       }
     },
-    [facing, stopCamera]
+    [facing]
   );
 
   const switchCamera = useCallback(async () => {
@@ -102,11 +143,16 @@ export function useCamera(): UseCameraReturn {
     return canvas.toDataURL('image/jpeg', 0.92);
   }, [isActive]);
 
+  // Component unmount olduğunda stream'i temizle
   useEffect(() => {
     return () => {
-      stopCamera();
+      callIdRef.current += 1;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
     };
-  }, [stopCamera]);
+  }, []);
 
   return {
     videoRef,

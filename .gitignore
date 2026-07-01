@@ -1,0 +1,15 @@
+# Python venv
+object-detector-api/.venv/
+object-detector-api/venv/
+object-detector-api/__pycache__/
+object-detector-api/*.pt
+object-detector-api/runs/
+object-detector-api/Ultralytics/
+object-detector-api/.env
+
+# Node
+object-detector/node_modules/
+object-detector/dist/
+
+# OS
+.DS_Store
