@@ -133,13 +133,27 @@ export function useCamera(): UseCameraReturn {
     const canvas = canvasRef.current;
     if (!video || !canvas || !isActive) return null;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const videoW = video.videoWidth;
+    const videoH = video.videoHeight;
+    const displayW = video.clientWidth;
+    const displayH = video.clientHeight;
+
+    // Video element'i object-cover ile gösteriliyor:
+    // CSS'in uyguladığı kırpmayı hesaplayıp canvas'a aynısını uygula.
+    // Böylece "ne görüyorsan onu çekmiş olursun".
+    const scale = Math.max(displayW / videoW, displayH / videoH);
+    const cropX = (videoW - displayW / scale) / 2;
+    const cropY = (videoH - displayH / scale) / 2;
+    const cropW = displayW / scale;
+    const cropH = displayH / scale;
+
+    canvas.width = Math.round(cropW);
+    canvas.height = Math.round(cropH);
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/jpeg', 0.92);
   }, [isActive]);
 
