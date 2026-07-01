@@ -1,0 +1,32 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: object-detector-api:latest
+    container_name: object-detector-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      MODEL_PATH: yolo11n.pt
+      CONFIDENCE_THRESHOLD: "${CONFIDENCE_THRESHOLD:-0.25}"
+      IOU_THRESHOLD: "${IOU_THRESHOLD:-0.45}"
+      MAX_DETECTIONS: "${MAX_DETECTIONS:-100}"
+      # Virgülle ayırarak birden fazla origin ekle
+      # CORS_ORIGINS: "http://localhost:5173,https://myapp.com"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+    volumes:
+      # Model dosyasını host'tan bağla — container yeniden başladığında tekrar indirmez
+      - model-cache:/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  model-cache:

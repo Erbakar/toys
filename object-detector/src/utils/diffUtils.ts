@@ -1,5 +1,5 @@
 import type { DetectionResult, DetectionDiff } from '../types/detection';
-import { detectionService } from '../services';
+import { detectionService } from '../services/detectionService';
 
 export function computeDiff(
   reference: DetectionResult,

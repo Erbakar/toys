@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { DetectionResult } from '../types/detection';
-import { detectionService } from '../services';
+import { detectionService } from '../services/detectionService';
 
 export interface UseDetectionReturn {
   isDetecting: boolean;
