@@ -16,36 +16,13 @@ interface DetectResponse {
   objects: DetectedObject[]; // Backend doğrudan frontend tipiyle uyumlu döner
 }
 
-// ─── Yardımcı ────────────────────────────────────────────────────────────────
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || a.length !== b.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot   += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
 // ─── Servis ──────────────────────────────────────────────────────────────────
 
 export class ApiDetectionService implements IDetectionService {
   private readonly baseUrl: string;
-  /**
-   * Embedding tabanlı eşleştirmede eşik değer (0–1).
-   * İki nesnenin "aynı" sayılması için minimum cosine similarity.
-   */
-  private readonly similarityThreshold: number;
 
-  constructor(
-    baseUrl = 'http://localhost:8000',
-    similarityThreshold = 0.85,
-  ) {
+  constructor(baseUrl = 'http://localhost:8000') {
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.similarityThreshold = similarityThreshold;
   }
 
   // ── detect ────────────────────────────────────────────────────────────────
@@ -75,49 +52,58 @@ export class ApiDetectionService implements IDetectionService {
 
   // ── compare ───────────────────────────────────────────────────────────────
 
+  /**
+   * Etiket + konum tabanlı eşleştirme.
+   *
+   * Her deteksiyonda nesnelere yeni UUID atandığından ID veya renk histogramı
+   * güvenilir değil. Aynı sahnede kamera sabitken iki fotoğraf karşılaştırılıyor;
+   * dolayısıyla aynı etiket + yakın konum = aynı fiziksel nesne.
+   *
+   * Algoritma:
+   *  1. Her kontrol nesnesini, aynı etikete sahip referans nesneleriyle karşılaştır.
+   *  2. Normalize bbox merkez mesafesini hesapla (0 = üst üste, 1 = köşe köşe).
+   *  3. Mesafe < MAX_CENTER_DIST ise eşleşme sayılır; en yakın eşleşme kazanır.
+   *  4. Eşleşemeyen kontrol nesnesi → added, eşleşemeyen referans nesnesi → removed.
+   */
   compare(reference: DetectionResult, current: DetectionResult): DetectionDiff {
-    const ref = reference.objects;
-    const cur = current.objects;
-
-    const hasEmbeddings =
-      ref.every((o) => o.featureEmbedding && o.featureEmbedding.length > 0) &&
-      cur.every((o) => o.featureEmbedding && o.featureEmbedding.length > 0);
-
-    return hasEmbeddings
-      ? this.compareByEmbedding(ref, cur)
-      : this.compareById(ref, cur);
+    return this.compareByLabelAndPosition(reference.objects, current.objects);
   }
 
-  // ── Özel eşleştirme yöntemleri ────────────────────────────────────────────
+  // ── Özel eşleştirme yöntemi ───────────────────────────────────────────────
 
-  /**
-   * CLIP embedding tabanlı eşleştirme.
-   * Her kontrol nesnesini referans nesneleriyle cosine similarity üzerinden
-   * karşılaştırır; eşleşme bulunamazsa "yeni nesne" olarak işaretler.
-   * Backend modeli veya etiket formatı değişse bile doğru çalışır.
-   */
-  private compareByEmbedding(
+  private compareByLabelAndPosition(
     refObjects: DetectedObject[],
     curObjects: DetectedObject[],
   ): DetectionDiff {
+    /** Kamera hafif hareket etse bile eşleşsin diye %25 tolerans. */
+    const MAX_CENTER_DIST = 0.25;
+
     const matched = new Set<string>();
     const unchanged: DetectedObject[] = [];
     const added: DetectedObject[] = [];
 
     for (const cur of curObjects) {
-      let bestScore = -1;
+      const curCx = cur.boundingBox.x + cur.boundingBox.width  / 2;
+      const curCy = cur.boundingBox.y + cur.boundingBox.height / 2;
+
+      let bestDist = Infinity;
       let bestRefId: string | null = null;
 
       for (const ref of refObjects) {
         if (matched.has(ref.id)) continue;
-        const score = cosineSimilarity(cur.featureEmbedding!, ref.featureEmbedding!);
-        if (score > bestScore) {
-          bestScore = score;
+        if (ref.label !== cur.label) continue;
+
+        const refCx = ref.boundingBox.x + ref.boundingBox.width  / 2;
+        const refCy = ref.boundingBox.y + ref.boundingBox.height / 2;
+        const dist  = Math.sqrt((refCx - curCx) ** 2 + (refCy - curCy) ** 2);
+
+        if (dist < bestDist) {
+          bestDist  = dist;
           bestRefId = ref.id;
         }
       }
 
-      if (bestRefId !== null && bestScore >= this.similarityThreshold) {
+      if (bestRefId !== null && bestDist <= MAX_CENTER_DIST) {
         matched.add(bestRefId);
         unchanged.push(cur);
       } else {
@@ -127,23 +113,8 @@ export class ApiDetectionService implements IDetectionService {
 
     return {
       added,
-      removed: refObjects.filter((r) => !matched.has(r.id)),
+      removed:   refObjects.filter((r) => !matched.has(r.id)),
       unchanged,
-    };
-  }
-
-  /** ID tabanlı basit eşleştirme — embedding yoksa devreye girer. */
-  private compareById(
-    refObjects: DetectedObject[],
-    curObjects: DetectedObject[],
-  ): DetectionDiff {
-    const refIds = new Set(refObjects.map((o) => o.id));
-    const curIds = new Set(curObjects.map((o) => o.id));
-
-    return {
-      removed:   refObjects.filter((o) => !curIds.has(o.id)),
-      added:     curObjects.filter((o) => !refIds.has(o.id)),
-      unchanged: curObjects.filter((o) =>  refIds.has(o.id)),
     };
   }
 }
