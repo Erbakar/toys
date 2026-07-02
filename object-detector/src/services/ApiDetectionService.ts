@@ -81,68 +81,129 @@ export class ApiDetectionService implements IDetectionService {
   // ── compare ───────────────────────────────────────────────────────────────
 
   /**
-   * Etiket + konum tabanlı eşleştirme.
+   * Etiket + konum + IoU + görsel embedding tabanlı eşleştirme.
    *
    * Her deteksiyonda nesnelere yeni UUID atandığından ID veya renk histogramı
-   * güvenilir değil. Aynı sahnede kamera sabitken iki fotoğraf karşılaştırılıyor;
-   * dolayısıyla aynı etiket + yakın konum = aynı fiziksel nesne.
+   * tek başına güvenilir değil. Aynı sahnede kamera sabitken iki fotoğraf
+   * karşılaştırılıyor; dolayısıyla aynı etiket + yakın konum + benzer boyut +
+   * benzer renk histogramı = aynı fiziksel nesne.
    *
    * Algoritma:
-   *  1. Her kontrol nesnesini, aynı etikete sahip referans nesneleriyle karşılaştır.
-   *  2. Normalize bbox merkez mesafesini hesapla (0 = üst üste, 1 = köşe köşe).
-   *  3. Mesafe < MAX_CENTER_DIST ise eşleşme sayılır; en yakın eşleşme kazanır.
-   *  4. Eşleşemeyen kontrol nesnesi → added, eşleşemeyen referans nesnesi → removed.
+   *  1. Aynı etikete sahip tüm referans/kontrol çiftleri skorlanır.
+   *  2. Skor; merkez yakınlığı, bbox IoU, alan benzerliği ve embedding cosine
+   *     benzerliğinin ağırlıklı toplamıdır.
+   *  3. En yüksek skorlu çiftlerden başlayarak bire-bir eşleşme yapılır.
+   *  4. Eşleşemeyen kontrol nesnesi added, referans nesnesi removed sayılır.
    */
   compare(reference: DetectionResult, current: DetectionResult): DetectionDiff {
-    return this.compareByLabelAndPosition(reference.objects, current.objects);
+    return this.compareBySimilarity(reference.objects, current.objects);
   }
 
   // ── Özel eşleştirme yöntemi ───────────────────────────────────────────────
 
-  private compareByLabelAndPosition(
+  private compareBySimilarity(
     refObjects: DetectedObject[],
     curObjects: DetectedObject[],
   ): DetectionDiff {
-    /** Kamera hafif hareket etse bile eşleşsin diye %25 tolerans. */
-    const MAX_CENTER_DIST = 0.25;
+    const MIN_MATCH_SCORE = 0.48;
+    const candidates: Array<{
+      score: number;
+      ref: DetectedObject;
+      cur: DetectedObject;
+    }> = [];
 
-    const matched = new Set<string>();
-    const unchanged: DetectedObject[] = [];
-    const added: DetectedObject[] = [];
-
-    for (const cur of curObjects) {
-      const curCx = cur.boundingBox.x + cur.boundingBox.width  / 2;
-      const curCy = cur.boundingBox.y + cur.boundingBox.height / 2;
-
-      let bestDist = Infinity;
-      let bestRefId: string | null = null;
-
-      for (const ref of refObjects) {
-        if (matched.has(ref.id)) continue;
-        if (ref.label !== cur.label) continue;
-
-        const refCx = ref.boundingBox.x + ref.boundingBox.width  / 2;
-        const refCy = ref.boundingBox.y + ref.boundingBox.height / 2;
-        const dist  = Math.sqrt((refCx - curCx) ** 2 + (refCy - curCy) ** 2);
-
-        if (dist < bestDist) {
-          bestDist  = dist;
-          bestRefId = ref.id;
+    for (const ref of refObjects) {
+      for (const cur of curObjects) {
+        const score = this.matchScore(ref, cur);
+        if (score >= MIN_MATCH_SCORE) {
+          candidates.push({ score, ref, cur });
         }
-      }
-
-      if (bestRefId !== null && bestDist <= MAX_CENTER_DIST) {
-        matched.add(bestRefId);
-        unchanged.push(cur);
-      } else {
-        added.push(cur);
       }
     }
 
+    candidates.sort((a, b) => b.score - a.score);
+
+    const matchedRef = new Set<string>();
+    const matchedCur = new Set<string>();
+    const unchanged: DetectedObject[] = [];
+
+    for (const candidate of candidates) {
+      if (matchedRef.has(candidate.ref.id) || matchedCur.has(candidate.cur.id)) continue;
+      matchedRef.add(candidate.ref.id);
+      matchedCur.add(candidate.cur.id);
+      unchanged.push(candidate.cur);
+    }
+
     return {
-      added,
-      removed:   refObjects.filter((r) => !matched.has(r.id)),
+      added: curObjects.filter((obj) => !matchedCur.has(obj.id)),
+      removed: refObjects.filter((obj) => !matchedRef.has(obj.id)),
       unchanged,
     };
+  }
+
+  private matchScore(ref: DetectedObject, cur: DetectedObject): number {
+    if (ref.label !== cur.label) return 0;
+
+    const dist = this.centerDistance(ref, cur);
+    const position = Math.max(0, 1 - Math.min(dist / 0.5, 1));
+    const iou = this.iou(ref, cur);
+    const size = this.sizeSimilarity(ref, cur);
+    const visual = this.embeddingSimilarity(ref.featureEmbedding, cur.featureEmbedding);
+
+    return 0.4 * position + 0.25 * iou + 0.2 * visual + 0.15 * size;
+  }
+
+  private centerDistance(ref: DetectedObject, cur: DetectedObject): number {
+    const refCx = ref.boundingBox.x + ref.boundingBox.width / 2;
+    const refCy = ref.boundingBox.y + ref.boundingBox.height / 2;
+    const curCx = cur.boundingBox.x + cur.boundingBox.width / 2;
+    const curCy = cur.boundingBox.y + cur.boundingBox.height / 2;
+    return Math.hypot(refCx - curCx, refCy - curCy);
+  }
+
+  private iou(ref: DetectedObject, cur: DetectedObject): number {
+    const a = ref.boundingBox;
+    const b = cur.boundingBox;
+    const ax2 = a.x + a.width;
+    const ay2 = a.y + a.height;
+    const bx2 = b.x + b.width;
+    const by2 = b.y + b.height;
+
+    const ix1 = Math.max(a.x, b.x);
+    const iy1 = Math.max(a.y, b.y);
+    const ix2 = Math.min(ax2, bx2);
+    const iy2 = Math.min(ay2, by2);
+    const intersection = Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1);
+    const union = a.width * a.height + b.width * b.height - intersection;
+    return union > 0 ? intersection / union : 0;
+  }
+
+  private sizeSimilarity(ref: DetectedObject, cur: DetectedObject): number {
+    const refArea = ref.boundingBox.width * ref.boundingBox.height;
+    const curArea = cur.boundingBox.width * cur.boundingBox.height;
+    const largest = Math.max(refArea, curArea);
+    return largest > 0 ? Math.max(0, 1 - Math.abs(refArea - curArea) / largest) : 0;
+  }
+
+  private embeddingSimilarity(refEmbedding?: number[], curEmbedding?: number[]): number {
+    if (!refEmbedding?.length || !curEmbedding?.length || refEmbedding.length !== curEmbedding.length) {
+      return 0.5;
+    }
+
+    let dot = 0;
+    let refNorm = 0;
+    let curNorm = 0;
+
+    for (let i = 0; i < refEmbedding.length; i++) {
+      const ref = refEmbedding[i];
+      const cur = curEmbedding[i];
+      dot += ref * cur;
+      refNorm += ref * ref;
+      curNorm += cur * cur;
+    }
+
+    const denom = Math.sqrt(refNorm) * Math.sqrt(curNorm);
+    if (denom <= 0) return 0.5;
+    return Math.max(0, Math.min(1, dot / denom));
   }
 }

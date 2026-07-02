@@ -121,6 +121,26 @@ class DetectResponse(BaseModel):
     inferenceMs: float = Field(..., description="YOLO inference süresi (ms)")
 
 
+class CompareRequest(BaseModel):
+    referenceImage: str = Field(..., description="Referans görüntü data URL/base64")
+    currentImage: str = Field(..., description="Kontrol görüntüsü data URL/base64")
+
+
+class ObjectMatch(BaseModel):
+    referenceId: str
+    currentId: str
+    score: float = Field(..., ge=0.0, le=1.0)
+
+
+class CompareResponse(BaseModel):
+    reference: DetectResponse
+    current: DetectResponse
+    added: list[DetectedObject]
+    removed: list[DetectedObject]
+    unchanged: list[DetectedObject]
+    matches: list[ObjectMatch]
+
+
 class HealthResponse(BaseModel):
     status: str
     model: str
@@ -163,17 +183,109 @@ def extract_embedding(crop: np.ndarray) -> list[float]:
     return (arr / norm).tolist() if norm > 0 else arr.tolist()
 
 
-# ─── Endpoint'ler ─────────────────────────────────────────────────────────────
+def bbox_iou(a: BoundingBox, b: BoundingBox) -> float:
+    ax2 = a.x + a.width
+    ay2 = a.y + a.height
+    bx2 = b.x + b.width
+    by2 = b.y + b.height
+
+    ix1 = max(a.x, b.x)
+    iy1 = max(a.y, b.y)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    intersection = iw * ih
+
+    area_a = a.width * a.height
+    area_b = b.width * b.height
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
 
 
-@app.post(
-    "/detect",
-    response_model=DetectResponse,
-    summary="Görüntüdeki nesneleri algıla",
-)
-async def detect(req: DetectRequest) -> DetectResponse:
+def center_distance(a: BoundingBox, b: BoundingBox) -> float:
+    acx = a.x + a.width / 2
+    acy = a.y + a.height / 2
+    bcx = b.x + b.width / 2
+    bcy = b.y + b.height / 2
+    return float(np.hypot(acx - bcx, acy - bcy))
+
+
+def size_similarity(a: BoundingBox, b: BoundingBox) -> float:
+    area_a = a.width * a.height
+    area_b = b.width * b.height
+    largest = max(area_a, area_b)
+    if largest <= 0:
+        return 0.0
+    return max(0.0, 1.0 - abs(area_a - area_b) / largest)
+
+
+def embedding_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.5
+    av = np.array(a, dtype=np.float32)
+    bv = np.array(b, dtype=np.float32)
+    denom = float(np.linalg.norm(av) * np.linalg.norm(bv))
+    if denom <= 0:
+        return 0.5
+    return float(np.clip(np.dot(av, bv) / denom, 0.0, 1.0))
+
+
+def match_score(reference: DetectedObject, current: DetectedObject) -> float:
+    if reference.label != current.label:
+        return 0.0
+
+    dist = center_distance(reference.boundingBox, current.boundingBox)
+    position = max(0.0, 1.0 - min(dist / 0.5, 1.0))
+    iou = bbox_iou(reference.boundingBox, current.boundingBox)
+    size = size_similarity(reference.boundingBox, current.boundingBox)
+    visual = embedding_similarity(reference.featureEmbedding, current.featureEmbedding)
+
+    score = 0.4 * position + 0.25 * iou + 0.2 * visual + 0.15 * size
+    return round(float(score), 4)
+
+
+def compare_objects(
+    reference_objects: list[DetectedObject],
+    current_objects: list[DetectedObject],
+) -> tuple[list[DetectedObject], list[DetectedObject], list[DetectedObject], list[ObjectMatch]]:
+    min_score = 0.48
+    candidates: list[tuple[float, DetectedObject, DetectedObject]] = []
+
+    for ref in reference_objects:
+        for cur in current_objects:
+            score = match_score(ref, cur)
+            if score >= min_score:
+                candidates.append((score, ref, cur))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    matched_ref: set[str] = set()
+    matched_cur: set[str] = set()
+    unchanged: list[DetectedObject] = []
+    matches: list[ObjectMatch] = []
+
+    for score, ref, cur in candidates:
+        if ref.id in matched_ref or cur.id in matched_cur:
+            continue
+        matched_ref.add(ref.id)
+        matched_cur.add(cur.id)
+        unchanged.append(cur)
+        matches.append(
+            ObjectMatch(
+                referenceId=ref.id,
+                currentId=cur.id,
+                score=score,
+            )
+        )
+
+    added = [obj for obj in current_objects if obj.id not in matched_cur]
+    removed = [obj for obj in reference_objects if obj.id not in matched_ref]
+    return added, removed, unchanged, matches
+
+
+def detect_objects(pil_img: Image.Image) -> tuple[list[DetectedObject], float, int, int]:
     model = get_model()
-    pil_img = parse_image(req.image)
     img_array = np.array(pil_img)
     h, w = img_array.shape[:2]
 
@@ -211,6 +323,21 @@ async def detect(req: DetectRequest) -> DetectResponse:
             )
         )
 
+    return objects, inference_ms, w, h
+
+
+# ─── Endpoint'ler ─────────────────────────────────────────────────────────────
+
+
+@app.post(
+    "/detect",
+    response_model=DetectResponse,
+    summary="Görüntüdeki nesneleri algıla",
+)
+async def detect(req: DetectRequest) -> DetectResponse:
+    pil_img = parse_image(req.image)
+    objects, inference_ms, w, h = detect_objects(pil_img)
+
     log.info(
         "Algılama tamamlandı — %d nesne, %.0fms  (görüntü: %dx%d)",
         len(objects), inference_ms, w, h,
@@ -220,6 +347,46 @@ async def detect(req: DetectRequest) -> DetectResponse:
         imageId=str(uuid.uuid4()),
         objects=objects,
         inferenceMs=round(inference_ms, 1),
+    )
+
+
+@app.post(
+    "/compare",
+    response_model=CompareResponse,
+    summary="İki görüntüyü algıla ve nesne değişimlerini karşılaştır",
+)
+async def compare(req: CompareRequest) -> CompareResponse:
+    ref_img = parse_image(req.referenceImage)
+    cur_img = parse_image(req.currentImage)
+
+    ref_objects, ref_ms, ref_w, ref_h = detect_objects(ref_img)
+    cur_objects, cur_ms, cur_w, cur_h = detect_objects(cur_img)
+    added, removed, unchanged, matches = compare_objects(ref_objects, cur_objects)
+
+    log.info(
+        "Karşılaştırma tamamlandı — ref=%d, cur=%d, added=%d, removed=%d, matches=%d",
+        len(ref_objects), len(cur_objects), len(added), len(removed), len(matches),
+    )
+    log.info(
+        "Görüntüler — ref: %dx%d %.0fms, cur: %dx%d %.0fms",
+        ref_w, ref_h, ref_ms, cur_w, cur_h, cur_ms,
+    )
+
+    return CompareResponse(
+        reference=DetectResponse(
+            imageId=str(uuid.uuid4()),
+            objects=ref_objects,
+            inferenceMs=round(ref_ms, 1),
+        ),
+        current=DetectResponse(
+            imageId=str(uuid.uuid4()),
+            objects=cur_objects,
+            inferenceMs=round(cur_ms, 1),
+        ),
+        added=added,
+        removed=removed,
+        unchanged=unchanged,
+        matches=matches,
     )
 
 
