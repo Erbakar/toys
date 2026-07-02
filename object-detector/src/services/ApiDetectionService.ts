@@ -19,11 +19,30 @@ interface DetectResponse {
 
 // ─── Servis ──────────────────────────────────────────────────────────────────
 
+function resolveApiBaseUrl(baseUrl: string): string {
+  const fallback = 'http://localhost:8000';
+
+  try {
+    const url = new URL(baseUrl || fallback);
+    const pageHost = window.location.hostname;
+    const apiHostIsLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    const pageHostIsLocal = ['localhost', '127.0.0.1', '::1'].includes(pageHost);
+
+    if (apiHostIsLocal && pageHost && !pageHostIsLocal) {
+      url.hostname = pageHost;
+    }
+
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return fallback;
+  }
+}
+
 export class ApiDetectionService implements IDetectionService {
   private readonly baseUrl: string;
 
   constructor(baseUrl = 'http://localhost:8000') {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.baseUrl = resolveApiBaseUrl(baseUrl);
   }
 
   // ── detect ────────────────────────────────────────────────────────────────

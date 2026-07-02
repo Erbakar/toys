@@ -1,13 +1,35 @@
 import type {
+  DetectedObject,
   DetectionResult,
   DetectionDiff,
   IDetectionService,
 } from '../types/detection';
 
+const MOCK_OBJECTS: DetectedObject[] = [
+  {
+    id: 'mock-car',
+    label: 'toy car',
+    confidence: 0.92,
+    boundingBox: { x: 0.16, y: 0.42, width: 0.24, height: 0.18 },
+  },
+  {
+    id: 'mock-block',
+    label: 'lego block',
+    confidence: 0.88,
+    boundingBox: { x: 0.48, y: 0.35, width: 0.16, height: 0.15 },
+  },
+  {
+    id: 'mock-ball',
+    label: 'ball',
+    confidence: 0.84,
+    boundingBox: { x: 0.68, y: 0.5, width: 0.14, height: 0.14 },
+  },
+];
+
 export class MockDetectionService implements IDetectionService {
   async detect(_imageDataUrl: string): Promise<DetectionResult> {
     return {
-      objects: [],
+      objects: MOCK_OBJECTS,
       imageUrl: _imageDataUrl,
       timestamp: Date.now(),
     };

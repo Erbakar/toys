@@ -34,12 +34,19 @@ export function CameraView({ camera, onCapture, title, subtitle }: CameraViewPro
 
     if (!isValidImageFile(file)) {
       alert('Lütfen geçerli bir resim dosyası seçin.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
-    const dataUrl = await fileToDataUrl(file);
-    onCapture(dataUrl);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      onCapture(dataUrl);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Dosya okunamadı.';
+      alert(message);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   return (
