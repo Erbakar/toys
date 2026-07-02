@@ -20,7 +20,16 @@ export function useDetection(): UseDetectionReturn {
       const result = await detectionService.detect(imageDataUrl);
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Nesne algılama başarısız oldu.';
+      const raw = err instanceof Error ? err.message : '';
+      const isNetworkError =
+        raw === 'Load failed' ||
+        raw === 'Failed to fetch' ||
+        raw.includes('NetworkError') ||
+        raw.includes('Network request failed');
+
+      const message = isNetworkError
+        ? 'API sunucusuna ulaşılamıyor. Backend çalışıyor mu ve VITE_API_URL güncel mi?'
+        : raw || 'Nesne algılama başarısız oldu.';
       setError(message);
       return null;
     } finally {
