@@ -13,6 +13,19 @@ The FastAPI backend is configured for Render with `render.yaml`.
 https://object-detector-api.onrender.com
 ```
 
+For detailed natural-language visual comparison, add this backend environment
+variable in Render:
+
+```env
+OPENAI_API_KEY=sk-...
+OPENAI_VISION_MODEL=gpt-4.1-mini
+ENABLE_OPENAI_VISION=true
+```
+
+Without `OPENAI_API_KEY`, the backend still works with YOLO, color, box, and
+embedding comparison, but it will not produce part-level natural-language
+findings such as "bebeğin kolu eksik olabilir".
+
 ## Frontend Vercel Environment
 
 The frontend is safe to deploy before the backend is public. If `VITE_API_URL`

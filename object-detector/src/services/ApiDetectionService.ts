@@ -3,6 +3,7 @@ import type {
   DetectionResult,
   DetectionDiff,
   IDetectionService,
+  ModifiedObject,
 } from '../types/detection';
 import { compressImageForApi } from '../utils/imageUtils';
 
@@ -15,6 +16,14 @@ interface DetectRequest {
 interface DetectResponse {
   imageId: string;
   objects: DetectedObject[]; // Backend doğrudan frontend tipiyle uyumlu döner
+}
+
+interface CompareResponse {
+  added: DetectedObject[];
+  removed: DetectedObject[];
+  unchanged: DetectedObject[];
+  modified: ModifiedObject[];
+  aiFindings?: DetectionDiff['aiFindings'];
 }
 
 // ─── Servis ──────────────────────────────────────────────────────────────────
@@ -99,6 +108,40 @@ export class ApiDetectionService implements IDetectionService {
     return this.compareBySimilarity(reference.objects, current.objects);
   }
 
+  async compareDetailed(
+    reference: DetectionResult,
+    current: DetectionResult,
+  ): Promise<DetectionDiff> {
+    const [referenceImage, currentImage] = await Promise.all([
+      compressImageForApi(reference.imageUrl),
+      compressImageForApi(current.imageUrl),
+    ]);
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ referenceImage, currentImage }),
+      });
+    } catch {
+      return this.compare(reference, current);
+    }
+
+    if (!res.ok) {
+      return this.compare(reference, current);
+    }
+
+    const data: CompareResponse = await res.json();
+    return {
+      added: data.added,
+      removed: data.removed,
+      unchanged: data.unchanged,
+      modified: data.modified,
+      aiFindings: data.aiFindings ?? [],
+    };
+  }
+
   // ── Özel eşleştirme yöntemi ───────────────────────────────────────────────
 
   private compareBySimilarity(
@@ -126,31 +169,57 @@ export class ApiDetectionService implements IDetectionService {
     const matchedRef = new Set<string>();
     const matchedCur = new Set<string>();
     const unchanged: DetectedObject[] = [];
+    const modified: ModifiedObject[] = [];
 
     for (const candidate of candidates) {
       if (matchedRef.has(candidate.ref.id) || matchedCur.has(candidate.cur.id)) continue;
       matchedRef.add(candidate.ref.id);
       matchedCur.add(candidate.cur.id);
-      unchanged.push(candidate.cur);
+
+      const visualSimilarity = this.embeddingSimilarity(
+        candidate.ref.featureEmbedding,
+        candidate.cur.featureEmbedding,
+      );
+      const sizeSimilarity = this.sizeSimilarity(candidate.ref, candidate.cur);
+      const reason = this.getModificationReason(candidate.ref, visualSimilarity, sizeSimilarity);
+
+      if (reason) {
+        modified.push({
+          reference: candidate.ref,
+          current: candidate.cur,
+          reason,
+          score: candidate.score,
+          visualSimilarity,
+          sizeSimilarity,
+        });
+      } else {
+        unchanged.push(candidate.cur);
+      }
     }
 
     return {
       added: curObjects.filter((obj) => !matchedCur.has(obj.id)),
       removed: refObjects.filter((obj) => !matchedRef.has(obj.id)),
       unchanged,
+      modified,
+      aiFindings: [],
     };
   }
 
   private matchScore(ref: DetectedObject, cur: DetectedObject): number {
     if (ref.label !== cur.label) return 0;
+    if (ref.dominantColor && cur.dominantColor && ref.dominantColor !== cur.dominantColor) {
+      return 0;
+    }
 
     const dist = this.centerDistance(ref, cur);
     const position = Math.max(0, 1 - Math.min(dist / 0.5, 1));
     const iou = this.iou(ref, cur);
     const size = this.sizeSimilarity(ref, cur);
     const visual = this.embeddingSimilarity(ref.featureEmbedding, cur.featureEmbedding);
+    const colorBonus = ref.dominantColor && ref.dominantColor === cur.dominantColor ? 1 : 0;
 
-    return 0.4 * position + 0.25 * iou + 0.2 * visual + 0.15 * size;
+    return 0.35 * position + 0.22 * iou + 0.2 * visual + 0.15 * size + 0.08 * colorBonus;
   }
 
   private centerDistance(ref: DetectedObject, cur: DetectedObject): number {
@@ -205,5 +274,33 @@ export class ApiDetectionService implements IDetectionService {
     const denom = Math.sqrt(refNorm) * Math.sqrt(curNorm);
     if (denom <= 0) return 0.5;
     return Math.max(0, Math.min(1, dot / denom));
+  }
+
+  private getModificationReason(
+    ref: DetectedObject,
+    visualSimilarity: number,
+    sizeSimilarity: number,
+  ): string | null {
+    const label = ref.label.toLowerCase();
+    const partSensitive =
+      label.includes('person') ||
+      label.includes('bear') ||
+      label.includes('doll') ||
+      label.includes('figure') ||
+      label.includes('teddy');
+
+    if (partSensitive && (visualSimilarity < 0.78 || sizeSimilarity < 0.72)) {
+      return 'Görünümü değişmiş; parça veya uzuv eksik olabilir.';
+    }
+
+    if (visualSimilarity < 0.68) {
+      return 'Renk veya yüzey görünümü belirgin değişmiş.';
+    }
+
+    if (sizeSimilarity < 0.62) {
+      return 'Boyutu/kapladığı alan belirgin değişmiş.';
+    }
+
+    return null;
   }
 }

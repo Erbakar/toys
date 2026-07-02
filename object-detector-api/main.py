@@ -9,6 +9,7 @@ GET  /docs    — Swagger UI (otomatik)
 
 import base64
 import io
+import json
 import logging
 import time
 import uuid
@@ -109,6 +110,7 @@ class DetectedObject(BaseModel):
     label: str = Field(..., description="COCO sınıf etiketi")
     confidence: float = Field(..., ge=0.0, le=1.0)
     boundingBox: BoundingBox
+    dominantColor: str | None = Field(default=None, description="Baskın renk adı")
     featureEmbedding: list[float] = Field(
         default_factory=list,
         description="Normalize renk histogramı (CLIP ile değiştirilebilir)",
@@ -130,6 +132,24 @@ class ObjectMatch(BaseModel):
     referenceId: str
     currentId: str
     score: float = Field(..., ge=0.0, le=1.0)
+    visualSimilarity: float = Field(..., ge=0.0, le=1.0)
+    sizeSimilarity: float = Field(..., ge=0.0, le=1.0)
+
+
+class ModifiedObject(BaseModel):
+    reference: DetectedObject
+    current: DetectedObject
+    reason: str
+    score: float = Field(..., ge=0.0, le=1.0)
+    visualSimilarity: float = Field(..., ge=0.0, le=1.0)
+    sizeSimilarity: float = Field(..., ge=0.0, le=1.0)
+
+
+class AiFinding(BaseModel):
+    type: str = Field(..., description="missing_part | missing_object | added_object | changed_object | uncertain")
+    title: str
+    detail: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
 
 
 class CompareResponse(BaseModel):
@@ -138,7 +158,9 @@ class CompareResponse(BaseModel):
     added: list[DetectedObject]
     removed: list[DetectedObject]
     unchanged: list[DetectedObject]
+    modified: list[ModifiedObject]
     matches: list[ObjectMatch]
+    aiFindings: list[AiFinding] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -164,6 +186,12 @@ def parse_image(data: str) -> Image.Image:
         ) from exc
 
 
+def ensure_data_url(data: str, mime: str = "image/jpeg") -> str:
+    if data.startswith("data:"):
+        return data
+    return f"data:{mime};base64,{data}"
+
+
 def extract_embedding(crop: np.ndarray) -> list[float]:
     """
     Nesne kırpmasından özellik vektörü çıkarır.
@@ -181,6 +209,101 @@ def extract_embedding(crop: np.ndarray) -> list[float]:
     arr = np.array(hist, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
     return (arr / norm).tolist() if norm > 0 else arr.tolist()
+
+
+def dominant_color_name(crop: np.ndarray) -> str | None:
+    if crop.size == 0:
+        return None
+
+    pixels = crop.reshape(-1, 3).astype(np.float32)
+    brightness = pixels.mean(axis=1)
+    saturated = pixels[(brightness > 35) & (brightness < 235)]
+    sample = saturated if len(saturated) > 0 else pixels
+    rgb = sample.mean(axis=0)
+
+    palette = {
+        "black": np.array([20, 20, 20], dtype=np.float32),
+        "white": np.array([235, 235, 235], dtype=np.float32),
+        "gray": np.array([128, 128, 128], dtype=np.float32),
+        "red": np.array([210, 45, 45], dtype=np.float32),
+        "orange": np.array([230, 130, 35], dtype=np.float32),
+        "yellow": np.array([225, 205, 45], dtype=np.float32),
+        "green": np.array([60, 165, 75], dtype=np.float32),
+        "blue": np.array([55, 105, 215], dtype=np.float32),
+        "purple": np.array([135, 75, 180], dtype=np.float32),
+        "pink": np.array([225, 105, 170], dtype=np.float32),
+        "brown": np.array([125, 80, 45], dtype=np.float32),
+    }
+
+    return min(palette, key=lambda name: float(np.linalg.norm(rgb - palette[name])))
+
+
+def parse_ai_findings(raw: str) -> list[AiFinding]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("OpenAI vision JSON ayrıştırılamadı: %s", raw[:300])
+        return []
+
+    findings = data.get("findings", []) if isinstance(data, dict) else []
+    parsed: list[AiFinding] = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        try:
+            parsed.append(
+                AiFinding(
+                    type=str(item.get("type", "uncertain")),
+                    title=str(item.get("title", "Görsel fark")),
+                    detail=str(item.get("detail", "")),
+                    confidence=float(item.get("confidence", 0.5)),
+                )
+            )
+        except Exception:
+            continue
+    return parsed[:8]
+
+
+def analyze_with_openai_vision(reference_image: str, current_image: str) -> list[AiFinding]:
+    if not settings.enable_openai_vision or not settings.openai_api_key:
+        return []
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=settings.openai_api_key)
+        response = client.responses.create(
+            model=settings.openai_vision_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Compare these two toy/table scene images. "
+                                "The first image is the reference; the second is the current state. "
+                                "Find concrete visual differences such as a missing toy, a specific colored object missing, "
+                                "a toy part missing, a doll/figure limb missing, or a new object. "
+                                "Return ONLY valid JSON with this exact shape: "
+                                "{\"findings\":[{\"type\":\"missing_part|missing_object|added_object|changed_object|uncertain\","
+                                "\"title\":\"short Turkish title\","
+                                "\"detail\":\"specific Turkish explanation\","
+                                "\"confidence\":0.0}]}. "
+                                "Be conservative: if unsure, use type uncertain and lower confidence. "
+                                "Prefer specific color/object descriptions like 'kırmızı oyuncak araba eksik'."
+                            ),
+                        },
+                        {"type": "input_image", "image_url": ensure_data_url(reference_image)},
+                        {"type": "input_image", "image_url": ensure_data_url(current_image)},
+                    ],
+                }
+            ],
+        )
+        return parse_ai_findings(response.output_text)
+    except Exception as exc:
+        log.warning("OpenAI vision analizi atlandı: %s", exc)
+        return []
 
 
 def bbox_iou(a: BoundingBox, b: BoundingBox) -> float:
@@ -234,21 +357,54 @@ def embedding_similarity(a: list[float], b: list[float]) -> float:
 def match_score(reference: DetectedObject, current: DetectedObject) -> float:
     if reference.label != current.label:
         return 0.0
+    if (
+        reference.dominantColor
+        and current.dominantColor
+        and reference.dominantColor != current.dominantColor
+    ):
+        return 0.0
 
     dist = center_distance(reference.boundingBox, current.boundingBox)
     position = max(0.0, 1.0 - min(dist / 0.5, 1.0))
     iou = bbox_iou(reference.boundingBox, current.boundingBox)
     size = size_similarity(reference.boundingBox, current.boundingBox)
     visual = embedding_similarity(reference.featureEmbedding, current.featureEmbedding)
+    color_bonus = 1.0 if reference.dominantColor == current.dominantColor else 0.0
 
-    score = 0.4 * position + 0.25 * iou + 0.2 * visual + 0.15 * size
+    score = 0.35 * position + 0.22 * iou + 0.2 * visual + 0.15 * size + 0.08 * color_bonus
     return round(float(score), 4)
+
+
+def modification_reason(
+    obj: DetectedObject,
+    visual_similarity: float,
+    obj_size_similarity: float,
+) -> str | None:
+    label = obj.label.lower()
+    part_sensitive = any(
+        token in label
+        for token in ("person", "bear", "doll", "figure", "teddy")
+    )
+
+    if part_sensitive and (visual_similarity < 0.78 or obj_size_similarity < 0.72):
+        return "Görünümü değişmiş; parça veya uzuv eksik olabilir."
+    if visual_similarity < 0.68:
+        return "Renk veya yüzey görünümü belirgin değişmiş."
+    if obj_size_similarity < 0.62:
+        return "Boyutu/kapladığı alan belirgin değişmiş."
+    return None
 
 
 def compare_objects(
     reference_objects: list[DetectedObject],
     current_objects: list[DetectedObject],
-) -> tuple[list[DetectedObject], list[DetectedObject], list[DetectedObject], list[ObjectMatch]]:
+) -> tuple[
+    list[DetectedObject],
+    list[DetectedObject],
+    list[DetectedObject],
+    list[ModifiedObject],
+    list[ObjectMatch],
+]:
     min_score = 0.48
     candidates: list[tuple[float, DetectedObject, DetectedObject]] = []
 
@@ -263,6 +419,7 @@ def compare_objects(
     matched_ref: set[str] = set()
     matched_cur: set[str] = set()
     unchanged: list[DetectedObject] = []
+    modified: list[ModifiedObject] = []
     matches: list[ObjectMatch] = []
 
     for score, ref, cur in candidates:
@@ -270,18 +427,35 @@ def compare_objects(
             continue
         matched_ref.add(ref.id)
         matched_cur.add(cur.id)
-        unchanged.append(cur)
+        visual = embedding_similarity(ref.featureEmbedding, cur.featureEmbedding)
+        size = size_similarity(ref.boundingBox, cur.boundingBox)
+        reason = modification_reason(ref, visual, size)
+        if reason:
+            modified.append(
+                ModifiedObject(
+                    reference=ref,
+                    current=cur,
+                    reason=reason,
+                    score=score,
+                    visualSimilarity=round(visual, 4),
+                    sizeSimilarity=round(size, 4),
+                )
+            )
+        else:
+            unchanged.append(cur)
         matches.append(
             ObjectMatch(
                 referenceId=ref.id,
                 currentId=cur.id,
                 score=score,
+                visualSimilarity=round(visual, 4),
+                sizeSimilarity=round(size, 4),
             )
         )
 
     added = [obj for obj in current_objects if obj.id not in matched_cur]
     removed = [obj for obj in reference_objects if obj.id not in matched_ref]
-    return added, removed, unchanged, matches
+    return added, removed, unchanged, modified, matches
 
 
 def detect_objects(pil_img: Image.Image) -> tuple[list[DetectedObject], float, int, int]:
@@ -319,6 +493,7 @@ def detect_objects(pil_img: Image.Image) -> tuple[list[DetectedObject], float, i
                     width=round((x2 - x1) / w, 6),
                     height=round((y2 - y1) / h, 6),
                 ),
+                dominantColor=dominant_color_name(crop),
                 featureEmbedding=extract_embedding(crop),
             )
         )
@@ -361,11 +536,12 @@ async def compare(req: CompareRequest) -> CompareResponse:
 
     ref_objects, ref_ms, ref_w, ref_h = detect_objects(ref_img)
     cur_objects, cur_ms, cur_w, cur_h = detect_objects(cur_img)
-    added, removed, unchanged, matches = compare_objects(ref_objects, cur_objects)
+    added, removed, unchanged, modified, matches = compare_objects(ref_objects, cur_objects)
+    ai_findings = analyze_with_openai_vision(req.referenceImage, req.currentImage)
 
     log.info(
-        "Karşılaştırma tamamlandı — ref=%d, cur=%d, added=%d, removed=%d, matches=%d",
-        len(ref_objects), len(cur_objects), len(added), len(removed), len(matches),
+        "Karşılaştırma tamamlandı — ref=%d, cur=%d, added=%d, removed=%d, modified=%d, matches=%d, ai=%d",
+        len(ref_objects), len(cur_objects), len(added), len(removed), len(modified), len(matches), len(ai_findings),
     )
     log.info(
         "Görüntüler — ref: %dx%d %.0fms, cur: %dx%d %.0fms",
@@ -386,7 +562,9 @@ async def compare(req: CompareRequest) -> CompareResponse:
         added=added,
         removed=removed,
         unchanged=unchanged,
+        modified=modified,
         matches=matches,
+        aiFindings=ai_findings,
     )
 
 

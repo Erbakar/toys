@@ -21,3 +21,7 @@ services:
         value: "8000"
       - key: CORS_ORIGINS
         value: "*"
+      - key: ENABLE_OPENAI_VISION
+        value: "true"
+      - key: OPENAI_VISION_MODEL
+        value: gpt-4.1-mini

@@ -4,3 +4,4 @@ ultralytics>=8.2.0
 pillow>=10.3.0
 numpy>=1.26.0
 pydantic-settings>=2.2.0
+openai>=2.0.0

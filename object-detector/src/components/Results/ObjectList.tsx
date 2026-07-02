@@ -1,5 +1,5 @@
 import type { DetectedObject } from '../../types/detection';
-import { getObjectEmoji, formatConfidence } from '../../utils/diffUtils';
+import { getObjectDisplayName, getObjectEmoji, formatConfidence } from '../../utils/diffUtils';
 import { Badge } from '../UI/Badge';
 
 interface ObjectListProps {
@@ -45,7 +45,9 @@ export function ObjectList({ title, objects, type, emptyMessage }: ObjectListPro
                 {getObjectEmoji(obj.label)}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-200 truncate">{obj.label}</p>
+                <p className="text-sm font-semibold text-slate-200 truncate">
+                  {getObjectDisplayName(obj)}
+                </p>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Güven: {formatConfidence(obj.confidence)}
                 </p>

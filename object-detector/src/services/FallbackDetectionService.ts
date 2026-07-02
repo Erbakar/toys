@@ -29,4 +29,19 @@ export class FallbackDetectionService implements IDetectionService {
   compare(reference: DetectionResult, current: DetectionResult): DetectionDiff {
     return this.primary.compare(reference, current);
   }
+
+  async compareDetailed(
+    reference: DetectionResult,
+    current: DetectionResult,
+  ): Promise<DetectionDiff> {
+    try {
+      return await this.primary.compareDetailed?.(reference, current) ?? this.primary.compare(reference, current);
+    } catch (err) {
+      if (!import.meta.env.PROD) {
+        throw err;
+      }
+
+      return this.fallback.compare(reference, current);
+    }
+  }
 }

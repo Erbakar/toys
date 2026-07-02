@@ -1,8 +1,11 @@
-import { useMemo } from 'react';
-import type { DetectionResult } from '../types/detection';
+import { useEffect, useMemo, useState } from 'react';
+import type { DetectionDiff, DetectionResult } from '../types/detection';
 import { computeDiff } from '../utils/diffUtils';
+import { detectionService } from '../services/detectionService';
 import { StatCard } from '../components/Results/StatCard';
 import { ObjectList } from '../components/Results/ObjectList';
+import { ModifiedObjectList } from '../components/Results/ModifiedObjectList';
+import { AiFindingList } from '../components/Results/AiFindingList';
 import { ComparisonView } from '../components/Results/ComparisonView';
 import { Button } from '../components/UI/Button';
 
@@ -23,11 +26,37 @@ export function ResultsPage({
     () => computeDiff(referenceResult, controlResult),
     [referenceResult, controlResult]
   );
+  const [detailedDiff, setDetailedDiff] = useState<DetectionDiff | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDetailedDiff() {
+      if (!detectionService.compareDetailed) {
+        setDetailedDiff(null);
+        return;
+      }
+
+      const result = await detectionService.compareDetailed(referenceResult, controlResult);
+      if (!cancelled) setDetailedDiff(result);
+    }
+
+    setDetailedDiff(null);
+    void loadDetailedDiff();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [referenceResult, controlResult]);
+
+  const activeDiff = detailedDiff ?? diff;
 
   const refCount = referenceResult.objects.length;
   const curCount = controlResult.objects.length;
-  const removedCount = diff.removed.length;
-  const addedCount = diff.added.length;
+  const removedCount = activeDiff.removed.length;
+  const addedCount = activeDiff.added.length;
+  const modifiedCount = activeDiff.modified.length;
+  const aiFindingCount = activeDiff.aiFindings.length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -92,6 +121,13 @@ export function ResultsPage({
           subtitle={removedCount > 0 ? 'nesne kaldırıldı' : 'nesne eksilmedi'}
         />
         <StatCard
+          icon="✏️"
+          label="Değişen"
+          value={modifiedCount}
+          variant={modifiedCount > 0 ? 'warning' : 'default'}
+          subtitle={modifiedCount > 0 ? 'nesne değişmiş' : 'değişim yok'}
+        />
+        <StatCard
           icon="➕"
           label="Yeni"
           value={addedCount}
@@ -101,12 +137,14 @@ export function ResultsPage({
       </div>
 
       {/* Summary banner */}
-      {removedCount === 0 && addedCount === 0 ? (
+      {removedCount === 0 && addedCount === 0 && modifiedCount === 0 && aiFindingCount === 0 ? (
         <div className="rounded-xl bg-green-950/40 border border-green-500/30 px-4 py-3 flex items-center gap-3">
           <span className="text-xl">✅</span>
           <div>
             <p className="text-sm font-semibold text-green-400">Değişiklik yok</p>
-            <p className="text-xs text-slate-400">Tüm nesneler yerli yerinde.</p>
+            <p className="text-xs text-slate-400">
+              {detailedDiff ? 'Detaylı analiz belirgin fark bulmadı.' : 'Tüm nesneler yerli yerinde.'}
+            </p>
           </div>
         </div>
       ) : (
@@ -114,7 +152,10 @@ export function ResultsPage({
           <span className="text-xl">⚠️</span>
           <div>
             <p className="text-sm font-semibold text-amber-400">
-              {removedCount} nesne eksik{addedCount > 0 ? `, ${addedCount} yeni nesne` : ''}
+              {removedCount} nesne eksik
+              {addedCount > 0 ? `, ${addedCount} yeni nesne` : ''}
+              {modifiedCount > 0 ? `, ${modifiedCount} nesne değişmiş` : ''}
+              {aiFindingCount > 0 ? `, ${aiFindingCount} detaylı bulgu` : ''}
             </p>
             <p className="text-xs text-slate-400">Tablodaki nesneler değişmiş.</p>
           </div>
@@ -130,20 +171,22 @@ export function ResultsPage({
       </div>
 
       {/* Object lists */}
-      {(removedCount > 0 || addedCount > 0) && (
+      {(removedCount > 0 || addedCount > 0 || modifiedCount > 0 || aiFindingCount > 0) && (
         <div className="flex flex-col gap-5">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
             Nesne Detayları
           </h2>
+          <AiFindingList findings={activeDiff.aiFindings} />
+          <ModifiedObjectList objects={activeDiff.modified} />
           <ObjectList
             title="Eksik Nesneler"
-            objects={diff.removed}
+            objects={activeDiff.removed}
             type="removed"
             emptyMessage="Hiçbir nesne kaldırılmadı"
           />
           <ObjectList
             title="Yeni Nesneler"
-            objects={diff.added}
+            objects={activeDiff.added}
             type="added"
             emptyMessage="Yeni nesne eklenmedi"
           />

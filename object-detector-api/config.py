@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     iou_threshold: float = 0.45
     max_detections: int = 100
 
+    # Optional OpenAI vision comparison
+    openai_api_key: str | None = None
+    openai_vision_model: str = "gpt-4.1-mini"
+    enable_openai_vision: bool = True
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

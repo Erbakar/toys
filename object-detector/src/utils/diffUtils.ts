@@ -1,4 +1,4 @@
-import type { DetectionResult, DetectionDiff } from '../types/detection';
+import type { DetectedObject, DetectionResult, DetectionDiff } from '../types/detection';
 import { detectionService } from '../services/detectionService';
 
 export function computeDiff(
@@ -10,6 +10,10 @@ export function computeDiff(
 
 export function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
+}
+
+export function getObjectDisplayName(obj: DetectedObject): string {
+  return [obj.dominantColor, obj.label].filter(Boolean).join(' ');
 }
 
 export function getObjectEmoji(label: string): string {
