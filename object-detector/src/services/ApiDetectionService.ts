@@ -4,6 +4,7 @@ import type {
   DetectionDiff,
   IDetectionService,
 } from '../types/detection';
+import { compressImageForApi } from '../utils/imageUtils';
 
 // ─── API Kontratı ────────────────────────────────────────────────────────────
 
@@ -28,13 +29,21 @@ export class ApiDetectionService implements IDetectionService {
   // ── detect ────────────────────────────────────────────────────────────────
 
   async detect(imageDataUrl: string): Promise<DetectionResult> {
-    const body: DetectRequest = { image: imageDataUrl };
+    const compressed = await compressImageForApi(imageDataUrl);
+    const body: DetectRequest = { image: compressed };
 
-    const res = await fetch(`${this.baseUrl}/detect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw new Error(
+        `API sunucusuna ulaşılamıyor (${this.baseUrl}). Backend ve tunnel çalışıyor mu?`,
+      );
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => res.statusText);
