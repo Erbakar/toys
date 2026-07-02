@@ -1,5 +1,4 @@
 import type {
-  DetectedObject,
   DetectionResult,
   DetectionDiff,
   IDetectionService,
