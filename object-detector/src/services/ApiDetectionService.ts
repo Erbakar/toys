@@ -60,31 +60,49 @@ export class ApiDetectionService implements IDetectionService {
     const compressed = await compressImageForApi(imageDataUrl);
     const body: DetectRequest = { image: compressed };
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/detect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch {
-      throw new Error(
-        `API sunucusuna ulaşılamıyor (${this.baseUrl}). Backend ve tunnel çalışıyor mu?`,
-      );
+    let lastError: Error | null = null;
+
+    // Render free tier: ilk istekte uyku/cold start olabilir — bir kez daha dene
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+
+      let res: Response;
+      try {
+        res = await fetch(`${this.baseUrl}/detect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        lastError = new Error(
+          `API sunucusuna ulaşılamıyor (${this.baseUrl}). Render servisi uyuyor olabilir — 1 dk bekleyip tekrar deneyin.`,
+        );
+        continue;
+      }
+
+      if (res.status === 502 || res.status === 503) {
+        lastError = new Error(
+          'Backend henüz hazır değil (502). Render servisi uyanıyor — birkaç saniye sonra tekrar deneyin.',
+        );
+        continue;
+      }
+
+      if (!res.ok) {
+        const detail = await res.text().catch(() => res.statusText);
+        throw new Error(`API hatası ${res.status}: ${detail}`);
+      }
+
+      const data: DetectResponse = await res.json();
+      return {
+        objects: data.objects,
+        imageUrl: imageDataUrl,
+        timestamp: Date.now(),
+      };
     }
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => res.statusText);
-      throw new Error(`API hatası ${res.status}: ${detail}`);
-    }
-
-    const data: DetectResponse = await res.json();
-
-    return {
-      objects: data.objects,
-      imageUrl: imageDataUrl,
-      timestamp: Date.now(),
-    };
+    throw lastError ?? new Error('Nesne algılama başarısız oldu.');
   }
 
   // ── compare ───────────────────────────────────────────────────────────────

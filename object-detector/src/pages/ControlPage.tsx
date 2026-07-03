@@ -110,7 +110,7 @@ export function ControlPage({ referenceResult, onComplete, onBack }: ControlPage
           />
 
           {isDetecting && (
-            <div className="flex items-center justify-center gap-3 py-4">
+            <div className="flex flex-col items-center justify-center gap-3 py-4">
               <svg
                 className="animate-spin h-5 w-5 text-indigo-400"
                 xmlns="http://www.w3.org/2000/svg"
@@ -120,7 +120,11 @@ export function ControlPage({ referenceResult, onComplete, onBack }: ControlPage
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              <p className="text-slate-400 text-sm">Nesneler algılanıyor...</p>
+              <p className="text-slate-400 text-sm text-center px-4">
+                Nesneler algılanıyor...
+                <br />
+                <span className="text-slate-500 text-xs">Render free planda ilk istek 30–60 sn sürebilir</span>
+              </p>
             </div>
           )}
 
