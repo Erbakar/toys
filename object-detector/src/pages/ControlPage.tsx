@@ -129,8 +129,20 @@ export function ControlPage({ referenceResult, onComplete, onBack }: ControlPage
           )}
 
           {error && (
-            <div className="rounded-xl bg-red-950/40 border border-red-500/30 px-4 py-3">
+            <div className="rounded-xl bg-red-950/40 border border-red-500/30 px-4 py-3 flex flex-col gap-3">
               <p className="text-red-400 text-sm">{error}</p>
+              {capturedImage && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    const result = await detect(capturedImage);
+                    if (result) setDetectionResult(result);
+                  }}
+                >
+                  Tekrar Analiz Et
+                </Button>
+              )}
             </div>
           )}
 

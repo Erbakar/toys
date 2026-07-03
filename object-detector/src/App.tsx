@@ -1,4 +1,6 @@
 import { useReducer } from 'react';
+import { Button } from './components/UI/Button';
+import { useApiWarmup } from './hooks/useApiWarmup';
 import type { AppState, AppAction } from './types/app';
 import type { DetectionResult } from './types/detection';
 import { ReferencePage } from './pages/ReferencePage';
@@ -37,6 +39,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
 
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const { status: apiStatus, error: apiError, retry: retryApiWarmup } = useApiWarmup();
 
   const handleReferenceComplete = (result: DetectionResult) => {
     dispatch({ type: 'SET_REFERENCE', payload: result });
@@ -78,6 +81,25 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {!shouldUseMockDetection && apiStatus === 'warming' && (
+        <div className="bg-amber-950/40 border-b border-amber-500/30 px-4 py-2.5">
+          <p className="max-w-2xl mx-auto text-xs text-amber-300 text-center">
+            Backend uyanıyor… Render free planda ilk bağlantı 30–90 sn sürebilir.
+          </p>
+        </div>
+      )}
+
+      {!shouldUseMockDetection && apiStatus === 'failed' && (
+        <div className="bg-red-950/40 border-b border-red-500/30 px-4 py-3">
+          <div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-red-300 text-center sm:text-left">{apiError}</p>
+            <Button variant="secondary" size="sm" onClick={retryApiWarmup}>
+              Tekrar Dene
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-6">

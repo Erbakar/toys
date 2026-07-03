@@ -5,6 +5,12 @@ import type {
   IDetectionService,
   ModifiedObject,
 } from '../types/detection';
+import {
+  fetchWithTimeout,
+  resolveApiBaseUrl,
+  sleep,
+  warmUpApi,
+} from '../utils/apiClient';
 import { compressImageForApi } from '../utils/imageUtils';
 
 // ─── API Kontratı ────────────────────────────────────────────────────────────
@@ -28,24 +34,9 @@ interface CompareResponse {
 
 // ─── Servis ──────────────────────────────────────────────────────────────────
 
-function resolveApiBaseUrl(baseUrl: string): string {
-  const fallback = 'http://localhost:8000';
-
-  try {
-    const url = new URL(baseUrl || fallback);
-    const pageHost = window.location.hostname;
-    const apiHostIsLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
-    const pageHostIsLocal = ['localhost', '127.0.0.1', '::1'].includes(pageHost);
-
-    if (apiHostIsLocal && pageHost && !pageHostIsLocal) {
-      url.hostname = pageHost;
-    }
-
-    return url.toString().replace(/\/$/, '');
-  } catch {
-    return fallback;
-  }
-}
+const DETECT_ATTEMPTS = 3;
+const DETECT_RETRY_DELAY_MS = 5000;
+const DETECT_TIMEOUT_MS = 120_000;
 
 export class ApiDetectionService implements IDetectionService {
   private readonly baseUrl: string;
@@ -57,27 +48,35 @@ export class ApiDetectionService implements IDetectionService {
   // ── detect ────────────────────────────────────────────────────────────────
 
   async detect(imageDataUrl: string): Promise<DetectionResult> {
+    await warmUpApi(this.baseUrl);
+
     const compressed = await compressImageForApi(imageDataUrl);
     const body: DetectRequest = { image: compressed };
 
     let lastError: Error | null = null;
 
-    // Render free tier: ilk istekte uyku/cold start olabilir — bir kez daha dene
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < DETECT_ATTEMPTS; attempt++) {
       if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 4000));
+        await sleep(DETECT_RETRY_DELAY_MS);
       }
 
       let res: Response;
       try {
-        res = await fetch(`${this.baseUrl}/detect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } catch {
+        res = await fetchWithTimeout(
+          `${this.baseUrl}/detect`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+          DETECT_TIMEOUT_MS,
+        );
+      } catch (err) {
+        const timedOut = err instanceof Error && err.name === 'AbortError';
         lastError = new Error(
-          `API sunucusuna ulaşılamıyor (${this.baseUrl}). Render servisi uyuyor olabilir — 1 dk bekleyip tekrar deneyin.`,
+          timedOut
+            ? 'Nesne algılama zaman aşımına uğradı (2 dk). Tekrar deneyin.'
+            : `API sunucusuna ulaşılamıyor (${this.baseUrl}). Render servisi uyuyor olabilir — birkaç saniye bekleyip tekrar deneyin.`,
         );
         continue;
       }

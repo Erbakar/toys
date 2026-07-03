@@ -98,16 +98,30 @@ export function ReferencePage({ onComplete }: ReferencePageProps) {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
               <p className="text-slate-400 text-sm text-center px-4">
-                Nesneler algılanıyor...
+                Backend hazırlanıyor ve nesneler algılanıyor…
                 <br />
-                <span className="text-slate-500 text-xs">Render free planda ilk istek 30–60 sn sürebilir</span>
+                <span className="text-slate-500 text-xs">
+                  Render free planda ilk istek 30–90 sn sürebilir — sayfayı kapatmayın
+                </span>
               </p>
             </div>
           )}
 
           {error && (
-            <div className="rounded-xl bg-red-950/40 border border-red-500/30 px-4 py-3">
+            <div className="rounded-xl bg-red-950/40 border border-red-500/30 px-4 py-3 flex flex-col gap-3">
               <p className="text-red-400 text-sm">{error}</p>
+              {capturedImage && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    const result = await detect(capturedImage);
+                    if (result) setDetectionResult(result);
+                  }}
+                >
+                  Tekrar Analiz Et
+                </Button>
+              )}
             </div>
           )}
 
