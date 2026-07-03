@@ -1,6 +1,7 @@
 import { useReducer } from 'react';
 import { Button } from './components/UI/Button';
 import { useApiWarmup } from './hooks/useApiWarmup';
+import { useApiKeepAlive } from './hooks/useApiKeepAlive';
 import type { AppState, AppAction } from './types/app';
 import type { DetectionResult } from './types/detection';
 import { ReferencePage } from './pages/ReferencePage';
@@ -40,6 +41,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const { status: apiStatus, error: apiError, retry: retryApiWarmup } = useApiWarmup();
+  useApiKeepAlive(!shouldUseMockDetection && apiStatus === 'ready');
 
   const handleReferenceComplete = (result: DetectionResult) => {
     dispatch({ type: 'SET_REFERENCE', payload: result });

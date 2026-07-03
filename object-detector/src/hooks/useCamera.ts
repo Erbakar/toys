@@ -154,7 +154,7 @@ export function useCamera(): UseCameraReturn {
     if (!ctx) return null;
 
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.92);
+    return canvas.toDataURL('image/jpeg', 0.85);
   }, [isActive]);
 
   // Component unmount olduğunda stream'i temizle

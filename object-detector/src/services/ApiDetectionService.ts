@@ -7,6 +7,7 @@ import type {
 } from '../types/detection';
 import {
   fetchWithTimeout,
+  invalidateWarmCache,
   resolveApiBaseUrl,
   sleep,
   warmUpApi,
@@ -34,8 +35,8 @@ interface CompareResponse {
 
 // ─── Servis ──────────────────────────────────────────────────────────────────
 
-const DETECT_ATTEMPTS = 3;
-const DETECT_RETRY_DELAY_MS = 5000;
+const DETECT_ATTEMPTS = 5;
+const DETECT_RETRY_DELAY_MS = 6000;
 const DETECT_TIMEOUT_MS = 120_000;
 
 export class ApiDetectionService implements IDetectionService {
@@ -48,8 +49,6 @@ export class ApiDetectionService implements IDetectionService {
   // ── detect ────────────────────────────────────────────────────────────────
 
   async detect(imageDataUrl: string): Promise<DetectionResult> {
-    await warmUpApi(this.baseUrl);
-
     const compressed = await compressImageForApi(imageDataUrl);
     const body: DetectRequest = { image: compressed };
 
@@ -57,7 +56,15 @@ export class ApiDetectionService implements IDetectionService {
 
     for (let attempt = 0; attempt < DETECT_ATTEMPTS; attempt++) {
       if (attempt > 0) {
+        invalidateWarmCache();
         await sleep(DETECT_RETRY_DELAY_MS);
+      }
+
+      try {
+        await warmUpApi(this.baseUrl, { force: attempt > 0 });
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error('Backend hazır değil.');
+        continue;
       }
 
       let res: Response;
@@ -72,18 +79,20 @@ export class ApiDetectionService implements IDetectionService {
           DETECT_TIMEOUT_MS,
         );
       } catch (err) {
+        invalidateWarmCache();
         const timedOut = err instanceof Error && err.name === 'AbortError';
         lastError = new Error(
           timedOut
             ? 'Nesne algılama zaman aşımına uğradı (2 dk). Tekrar deneyin.'
-            : `API sunucusuna ulaşılamıyor (${this.baseUrl}). Render servisi uyuyor olabilir — birkaç saniye bekleyip tekrar deneyin.`,
+            : `Backend bağlantısı koptu (${this.baseUrl}). İlk fotoğraftan sonra sunucu yeniden başlıyor olabilir — "Tekrar Analiz Et" ile deneyin.`,
         );
         continue;
       }
 
       if (res.status === 502 || res.status === 503) {
+        invalidateWarmCache();
         lastError = new Error(
-          'Backend henüz hazır değil (502). Render servisi uyanıyor — birkaç saniye sonra tekrar deneyin.',
+          'Backend henüz hazır değil (502). Sunucu uyanıyor — birkaç saniye sonra tekrar deneyin.',
         );
         continue;
       }
@@ -96,7 +105,7 @@ export class ApiDetectionService implements IDetectionService {
       const data: DetectResponse = await res.json();
       return {
         objects: data.objects,
-        imageUrl: imageDataUrl,
+        imageUrl: compressed,
         timestamp: Date.now(),
       };
     }

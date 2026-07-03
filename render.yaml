@@ -17,6 +17,8 @@ services:
         value: "0.45"
       - key: MAX_DETECTIONS
         value: "100"
+      - key: INFERENCE_IMG_SIZE
+        value: "640"
       - key: PORT
         value: "8000"
       - key: CORS_ORIGINS

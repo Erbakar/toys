@@ -8,6 +8,7 @@ GET  /docs    — Swagger UI (otomatik)
 """
 
 import base64
+import gc
 import io
 import json
 import logging
@@ -469,6 +470,7 @@ def detect_objects(pil_img: Image.Image) -> tuple[list[DetectedObject], float, i
         conf=settings.confidence_threshold,
         iou=settings.iou_threshold,
         max_det=settings.max_detections,
+        imgsz=settings.inference_img_size,
         verbose=False,
     )[0]
     inference_ms = (time.perf_counter() - t0) * 1000
@@ -497,6 +499,9 @@ def detect_objects(pil_img: Image.Image) -> tuple[list[DetectedObject], float, i
                 featureEmbedding=extract_embedding(crop),
             )
         )
+
+    del results, img_array
+    gc.collect()
 
     return objects, inference_ms, w, h
 

@@ -4,6 +4,7 @@ import { PhotoPreview } from '../components/Camera/PhotoPreview';
 import { Button } from '../components/UI/Button';
 import { useCamera } from '../hooks/useCamera';
 import { useDetection } from '../hooks/useDetection';
+import { compressImageForApi } from '../utils/imageUtils';
 import type { DetectionResult } from '../types/detection';
 
 interface ReferencePageProps {
@@ -17,9 +18,10 @@ export function ReferencePage({ onComplete }: ReferencePageProps) {
   const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null);
 
   const handleCapture = async (dataUrl: string) => {
-    setCapturedImage(dataUrl);
     camera.stopCamera();
-    const result = await detect(dataUrl);
+    const compressed = await compressImageForApi(dataUrl);
+    setCapturedImage(compressed);
+    const result = await detect(compressed);
     if (result) setDetectionResult(result);
   };
 

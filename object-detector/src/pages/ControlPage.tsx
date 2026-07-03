@@ -4,6 +4,7 @@ import { PhotoPreview } from '../components/Camera/PhotoPreview';
 import { Button } from '../components/UI/Button';
 import { useCamera } from '../hooks/useCamera';
 import { useDetection } from '../hooks/useDetection';
+import { compressImageForApi } from '../utils/imageUtils';
 import type { DetectionResult } from '../types/detection';
 
 interface ControlPageProps {
@@ -19,9 +20,10 @@ export function ControlPage({ referenceResult, onComplete, onBack }: ControlPage
   const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null);
 
   const handleCapture = async (dataUrl: string) => {
-    setCapturedImage(dataUrl);
     camera.stopCamera();
-    const result = await detect(dataUrl);
+    const compressed = await compressImageForApi(dataUrl);
+    setCapturedImage(compressed);
+    const result = await detect(compressed);
     if (result) setDetectionResult(result);
   };
 
@@ -121,9 +123,11 @@ export function ControlPage({ referenceResult, onComplete, onBack }: ControlPage
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
               <p className="text-slate-400 text-sm text-center px-4">
-                Nesneler algılanıyor...
+                Backend hazırlanıyor ve nesneler algılanıyor…
                 <br />
-                <span className="text-slate-500 text-xs">Render free planda ilk istek 30–60 sn sürebilir</span>
+                <span className="text-slate-500 text-xs">
+                  Kontrol fotoğrafı 30–90 sn sürebilir — sayfayı kapatmayın
+                </span>
               </p>
             </div>
           )}

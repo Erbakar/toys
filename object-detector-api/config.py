@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
     max_detections: int = 100
+    inference_img_size: int = 640
 
     # Optional OpenAI vision comparison
     openai_api_key: str | None = None
