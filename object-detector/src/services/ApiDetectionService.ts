@@ -25,11 +25,7 @@ interface DetectResponse {
   objects: DetectedObject[]; // Backend doğrudan frontend tipiyle uyumlu döner
 }
 
-interface CompareResponse {
-  added: DetectedObject[];
-  removed: DetectedObject[];
-  unchanged: DetectedObject[];
-  modified: ModifiedObject[];
+interface VisionCompareResponse {
   aiFindings?: DetectionDiff['aiFindings'];
 }
 
@@ -38,6 +34,7 @@ interface CompareResponse {
 const DETECT_ATTEMPTS = 5;
 const DETECT_RETRY_DELAY_MS = 6000;
 const DETECT_TIMEOUT_MS = 120_000;
+const VISION_COMPARE_TIMEOUT_MS = 45_000;
 
 export class ApiDetectionService implements IDetectionService {
   private readonly baseUrl: string;
@@ -138,32 +135,34 @@ export class ApiDetectionService implements IDetectionService {
     reference: DetectionResult,
     current: DetectionResult,
   ): Promise<DetectionDiff> {
+    const baseDiff = this.compare(reference, current);
     const [referenceImage, currentImage] = await Promise.all([
-      compressImageForApi(reference.imageUrl),
-      compressImageForApi(current.imageUrl),
+      compressImageForApi(reference.imageUrl, 960, 0.76),
+      compressImageForApi(current.imageUrl, 960, 0.76),
     ]);
 
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/compare`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ referenceImage, currentImage }),
-      });
+      res = await fetchWithTimeout(
+        `${this.baseUrl}/vision-compare`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ referenceImage, currentImage }),
+        },
+        VISION_COMPARE_TIMEOUT_MS,
+      );
     } catch {
-      return this.compare(reference, current);
+      return baseDiff;
     }
 
     if (!res.ok) {
-      return this.compare(reference, current);
+      return baseDiff;
     }
 
-    const data: CompareResponse = await res.json();
+    const data: VisionCompareResponse = await res.json();
     return {
-      added: data.added,
-      removed: data.removed,
-      unchanged: data.unchanged,
-      modified: data.modified,
+      ...baseDiff,
       aiFindings: data.aiFindings ?? [],
     };
   }

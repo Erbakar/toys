@@ -9,12 +9,15 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
     max_detections: int = 100
-    inference_img_size: int = 640
+    inference_img_size: int = 416
+    max_image_dimension: int = 1280
 
     # Optional OpenAI vision comparison
     openai_api_key: str | None = None
     openai_vision_model: str = "gpt-4.1-mini"
     enable_openai_vision: bool = True
+    openai_timeout_seconds: float = 25.0
+    openai_vision_image_max_dimension: int = 768
 
     # Server
     host: str = "0.0.0.0"

@@ -18,7 +18,13 @@ services:
       - key: MAX_DETECTIONS
         value: "100"
       - key: INFERENCE_IMG_SIZE
-        value: "640"
+        value: "416"
+      - key: MAX_IMAGE_DIMENSION
+        value: "1280"
+      - key: OPENAI_TIMEOUT_SECONDS
+        value: "25"
+      - key: OPENAI_VISION_IMAGE_MAX_DIMENSION
+        value: "768"
       - key: PORT
         value: "8000"
       - key: CORS_ORIGINS

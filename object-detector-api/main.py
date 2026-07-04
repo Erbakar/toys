@@ -164,6 +164,15 @@ class CompareResponse(BaseModel):
     aiFindings: list[AiFinding] = Field(default_factory=list)
 
 
+class VisionCompareRequest(BaseModel):
+    referenceImage: str = Field(..., description="Referans görüntü data URL/base64")
+    currentImage: str = Field(..., description="Kontrol görüntüsü data URL/base64")
+
+
+class VisionCompareResponse(BaseModel):
+    aiFindings: list[AiFinding] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     status: str
     model: str
@@ -179,7 +188,11 @@ def parse_image(data: str) -> Image.Image:
     try:
         payload = data.split(",", 1)[1] if data.startswith("data:") else data
         raw = base64.b64decode(payload)
-        return Image.open(io.BytesIO(raw)).convert("RGB")
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        max_dim = settings.max_image_dimension
+        if max_dim > 0 and max(img.size) > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        return img
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -191,6 +204,18 @@ def ensure_data_url(data: str, mime: str = "image/jpeg") -> str:
     if data.startswith("data:"):
         return data
     return f"data:{mime};base64,{data}"
+
+
+def compact_image_data_url(data: str) -> str:
+    img = parse_image(data)
+    max_dim = settings.openai_vision_image_max_dimension
+    if max_dim > 0 and max(img.size) > max_dim:
+        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=78, optimize=True)
+    payload = base64.b64encode(buf.getvalue()).decode()
+    return f"data:image/jpeg;base64,{payload}"
 
 
 def extract_embedding(crop: np.ndarray) -> list[float]:
@@ -272,7 +297,12 @@ def analyze_with_openai_vision(reference_image: str, current_image: str) -> list
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.openai_timeout_seconds,
+        )
+        reference_data_url = compact_image_data_url(reference_image)
+        current_data_url = compact_image_data_url(current_image)
         response = client.responses.create(
             model=settings.openai_vision_model,
             input=[
@@ -295,8 +325,8 @@ def analyze_with_openai_vision(reference_image: str, current_image: str) -> list
                                 "Prefer specific color/object descriptions like 'kırmızı oyuncak araba eksik'."
                             ),
                         },
-                        {"type": "input_image", "image_url": ensure_data_url(reference_image)},
-                        {"type": "input_image", "image_url": ensure_data_url(current_image)},
+                        {"type": "input_image", "image_url": ensure_data_url(reference_data_url)},
+                        {"type": "input_image", "image_url": ensure_data_url(current_data_url)},
                     ],
                 }
             ],
@@ -571,6 +601,17 @@ async def compare(req: CompareRequest) -> CompareResponse:
         matches=matches,
         aiFindings=ai_findings,
     )
+
+
+@app.post(
+    "/vision-compare",
+    response_model=VisionCompareResponse,
+    summary="İki görüntüyü OpenAI vision ile doğal dil fark analizi için karşılaştır",
+)
+async def vision_compare(req: VisionCompareRequest) -> VisionCompareResponse:
+    ai_findings = analyze_with_openai_vision(req.referenceImage, req.currentImage)
+    log.info("Vision karşılaştırma tamamlandı — ai=%d", len(ai_findings))
+    return VisionCompareResponse(aiFindings=ai_findings)
 
 
 @app.get("/health", response_model=HealthResponse, summary="Servis durumu")
